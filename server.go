@@ -2,6 +2,7 @@ package redhub
 
 import (
 	"bytes"
+	"strings"
 	"sync"
 
 	"github.com/IceFireDB/redhub/pkg/resp"
@@ -33,9 +34,6 @@ type Options struct {
 
 type redisServer struct {
 	*gnet.EventServer
-	onOpened func(c *Conn) (out []byte, action Action)
-	onClosed func(c *Conn, err error) (action Action)
-	handler  func(c *Conn, cmd resp.Command) (out []byte, action Action)
 }
 
 type connBuffer struct {
@@ -47,7 +45,6 @@ func (rs *redisServer) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
 	connSync.Lock()
 	defer connSync.Unlock()
 	iceConn[c] = new(connBuffer)
-	rs.onOpened(&Conn{Conn: c})
 	return
 }
 
@@ -55,9 +52,11 @@ func (rs *redisServer) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
 	connSync.Lock()
 	defer connSync.Unlock()
 	delete(iceConn, c)
-	rs.onClosed(&Conn{Conn: c}, err)
 	return
 }
+
+var mu sync.RWMutex
+var items = make(map[string][]byte)
 
 func (rs *redisServer) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {
 	connSync.RLock()
@@ -83,11 +82,56 @@ func (rs *redisServer) React(frame []byte, c gnet.Conn) (out []byte, action gnet
 			} else {
 				cb.command = cb.command[1:]
 			}
-			outOne, status := rs.handler(&Conn{Conn: c}, cmd)
-			out = append(out, outOne...)
-			switch status {
-			case Close:
+			switch strings.ToLower(string(cmd.Args[0])) {
+			default:
+				out = resp.AppendError(out, "ERR unknown command '"+string(cmd.Args[0])+"'")
+			case "ping":
+				out = resp.AppendString(out, "PONG")
+			case "quit":
+				out = resp.AppendString(out, "OK")
 				action = gnet.Close
+			case "set":
+				if len(cmd.Args) != 3 {
+					out = resp.AppendError(out, "ERR wrong number of arguments for '"+string(cmd.Args[0])+"' command")
+					break
+				}
+				mu.Lock()
+				items[string(cmd.Args[1])] = cmd.Args[2]
+				mu.Unlock()
+				out = resp.AppendString(out, "OK")
+			case "get":
+				if len(cmd.Args) != 2 {
+					out = resp.AppendError(out, "ERR wrong number of arguments for '"+string(cmd.Args[0])+"' command")
+					break
+				}
+				mu.RLock()
+				val, ok := items[string(cmd.Args[1])]
+				mu.RUnlock()
+				if !ok {
+					out = resp.AppendNull(out)
+				} else {
+					out = resp.AppendBulk(out, val)
+				}
+			case "del":
+				if len(cmd.Args) != 2 {
+					out = resp.AppendError(out, "ERR wrong number of arguments for '"+string(cmd.Args[0])+"' command")
+					break
+				}
+				mu.Lock()
+				_, ok := items[string(cmd.Args[1])]
+				delete(items, string(cmd.Args[1]))
+				mu.Unlock()
+				if !ok {
+					out = resp.AppendInt(out, 0)
+				} else {
+					out = resp.AppendInt(out, 1)
+				}
+			case "config":
+				// This simple (blank) response is only here to allow for the
+				// redis-benchmark command to work with this example.
+				out = resp.AppendArray(out, 2)
+				out = resp.AppendBulk(out, cmd.Args[2])
+				out = resp.AppendBulkString(out, "")
 			}
 		}
 	} else {
@@ -102,14 +146,7 @@ func init() {
 
 func ListendAndServe(addr string,
 	options Options,
-	onOpened func(c *Conn) (out []byte, action Action),
-	onClosed func(c *Conn, err error) (action Action),
-	handler func(c *Conn, cmd resp.Command) (out []byte, action Action),
 ) error {
-	rs := &redisServer{
-		onOpened: onOpened,
-		onClosed: onClosed,
-		handler:  handler,
-	}
+	rs := &redisServer{}
 	return gnet.Serve(rs, addr, gnet.WithOptions(options.Options))
 }
