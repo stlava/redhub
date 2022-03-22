@@ -2,11 +2,12 @@ package redhub
 
 import (
 	"bytes"
+	"errors"
 	"sync"
 	"time"
 
 	"github.com/IceFireDB/redhub/pkg/resp"
-	"github.com/panjf2000/gnet"
+	gnet "github.com/panjf2000/gnet/v2"
 )
 
 type Action int
@@ -17,14 +18,7 @@ const (
 
 	// Close closes the connection.
 	Close
-
-	// Shutdown shutdowns the server.
-	Shutdown
 )
-
-type Conn struct {
-	gnet.Conn
-}
 
 type Options struct {
 	// Multicore indicates whether the server will be effectively created with multi-cores, if so,
@@ -74,93 +68,143 @@ type Options struct {
 
 	// SocketSendBuffer sets the maximum socket send buffer in bytes.
 	SocketSendBuffer int
-
-	// ICodec encodes and decodes TCP stream.
-	Codec gnet.ICodec
 }
 
 func NewRedHub(
-	onOpened func(c *Conn) (out []byte, action Action),
-	onClosed func(c *Conn, err error) (action Action),
-	handler func(cmd resp.Command, out []byte) ([]byte, Action),
-) *redHub {
-	return &redHub{
-		redHubBufMap: make(map[gnet.Conn]*connBuffer),
-		connSync:     sync.RWMutex{},
-		onOpened:     onOpened,
-		onClosed:     onClosed,
-		handler:      handler,
+	onOpened func(c Conn) (action Action),
+	onClosed func(c Conn, err error) (action Action),
+	handler func(c Conn, cmd resp.Command) (action Action),
+) *RedHub {
+	return &RedHub{
+		conns:    make(map[gnet.Conn]*conn),
+		connSync: sync.RWMutex{},
+		onOpened: onOpened,
+		onClosed: onClosed,
+		handler:  handler,
 	}
 }
 
-type redHub struct {
-	*gnet.EventServer
-	onOpened     func(c *Conn) (out []byte, action Action)
-	onClosed     func(c *Conn, err error) (action Action)
-	handler      func(cmd resp.Command, out []byte) ([]byte, Action)
-	redHubBufMap map[gnet.Conn]*connBuffer
-	connSync     sync.RWMutex
+type RedHub struct {
+	*gnet.Engine
+	onOpened func(c Conn) (action Action)
+	onClosed func(c Conn, err error) (action Action)
+	handler  func(c Conn, cmd resp.Command) (action Action)
+	conns    map[gnet.Conn]*conn
+	connSync sync.RWMutex
+	adder    string
+	signal   chan error
+}
+
+func (rs *RedHub) OnTick() (delay time.Duration, action gnet.Action) {
+	return
+}
+
+func (rs *RedHub) OnShutdown(eng gnet.Engine) {
+
 }
 
 type connBuffer struct {
 	buf     bytes.Buffer
 	command []resp.Command
+	mu      *sync.Mutex
 }
 
-func (rs *redHub) OnOpened(c gnet.Conn) (out []byte, action gnet.Action) {
+func (rs *RedHub) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	rs.connSync.Lock()
 	defer rs.connSync.Unlock()
-	rs.redHubBufMap[c] = new(connBuffer)
-	rs.onOpened(&Conn{Conn: c})
+
+	cb := &connBuffer{
+		buf:     bytes.Buffer{},
+		command: []resp.Command{},
+		mu:      &sync.Mutex{},
+	}
+
+	newConn := &conn{
+		conn:        c,
+		cb:          cb,
+		wr:          resp.NewWriter(),
+		processData: make(chan interface{}),
+		muClosed:    &sync.Mutex{},
+	}
+	rs.conns[c] = newConn
+
+	go newConn.process(rs.handler)
+
+	rs.onOpened(newConn)
 	return
 }
 
-func (rs *redHub) OnClosed(c gnet.Conn, err error) (action gnet.Action) {
+func (rs *RedHub) OnClose(gc gnet.Conn, err error) (action gnet.Action) {
 	rs.connSync.Lock()
 	defer rs.connSync.Unlock()
-	delete(rs.redHubBufMap, c)
-	rs.onClosed(&Conn{Conn: c}, err)
+
+	c := rs.conns[gc]
+	if c == nil {
+		return
+	}
+	delete(rs.conns, gc)
+	rs.onClosed(c, err)
+
+	_ = c.close()
 	return
 }
 
-func (rs *redHub) React(frame []byte, c gnet.Conn) (out []byte, action gnet.Action) {
+func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	rs.connSync.RLock()
 	defer rs.connSync.RUnlock()
-	cb, ok := rs.redHubBufMap[c]
+	c, ok := rs.conns[gc]
 	if !ok {
-		out = resp.AppendError(out, "ERR Client is closed")
 		return
 	}
-	cb.buf.Write(frame)
-	cmds, lastbyte, err := resp.ReadCommands(cb.buf.Bytes())
+
+	c.muClosed.Lock()
+	defer c.muClosed.Unlock()
+
+	if c.closed {
+		return
+	}
+
+	c.cb.mu.Lock()
+
+	buf, _ := gc.Next(-1)
+	c.cb.buf.Write(buf)
+
+	cmds, lastbyte, err := resp.ReadCommands(c.cb.buf.Bytes())
 	if err != nil {
-		out = resp.AppendError(out, "ERR "+err.Error())
+		_, _ = gc.Write(resp.AppendError([]byte{}, "ERR "+err.Error()))
+		c.cb.mu.Unlock()
 		return
 	}
-	cb.command = append(cb.command, cmds...)
-	cb.buf.Reset()
-	if len(lastbyte) == 0 {
-		var status Action
-		for len(cb.command) > 0 {
-			cmd := cb.command[0]
-			if len(cb.command) == 1 {
-				cb.command = nil
-			} else {
-				cb.command = cb.command[1:]
-			}
-			out, status = rs.handler(cmd, out)
-			switch status {
-			case Close:
-				action = gnet.Close
-			}
+
+	// Make sure to make a copy of the args because the underlying
+	// slice that made it is "unsafe".
+	for _, cmd := range cmds {
+		for i, arg := range cmd.Args {
+			n := make([]byte, len(arg))
+			copy(n, arg)
+			cmd.Args[i] = n
 		}
-	} else {
-		cb.buf.Write(lastbyte)
 	}
+
+	c.cb.command = append(c.cb.command, cmds...)
+	c.cb.buf.Reset()
+	if len(lastbyte) == 0 {
+		c.cb.mu.Unlock()
+		c.notify()
+	} else {
+		c.cb.buf.Write(lastbyte)
+		c.cb.mu.Unlock()
+	}
+
 	return
 }
 
-func ListendAndServe(addr string, options Options, rh *redHub) error {
+func (rs *RedHub) OnBoot(srv gnet.Engine) (action gnet.Action) {
+	rs.signal <- nil
+	return
+}
+
+func ListendAndServe(signal chan error, addr string, options Options, rh *RedHub) error {
 	serveOptions := gnet.Options{
 		Multicore:        options.Multicore,
 		LockOSThread:     options.LockOSThread,
@@ -170,11 +214,21 @@ func ListendAndServe(addr string, options Options, rh *redHub) error {
 		ReusePort:        options.ReusePort,
 		Ticker:           options.Ticker,
 		TCPKeepAlive:     options.TCPKeepAlive,
-		TCPNoDelay:       options.TCPNoDelay,
+		TCPNoDelay:       gnet.TCPDelay,
 		SocketRecvBuffer: options.SocketRecvBuffer,
 		SocketSendBuffer: options.SocketSendBuffer,
-		Codec:            options.Codec,
+		ReuseAddr:        false,
 	}
+	rh.signal = signal
 
-	return gnet.Serve(rh, addr, gnet.WithOptions(serveOptions))
+	err := gnet.Run(rh, addr, gnet.WithOptions(serveOptions))
+
+	if err != nil {
+		signal <- err
+	}
+	defer close(signal)
+	if err == nil {
+		return errors.New("context done")
+	}
+	return err
 }

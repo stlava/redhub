@@ -1,14 +1,9 @@
 package resp
 
-import "errors"
-
 var (
 	errUnbalancedQuotes       = &errProtocol{"unbalanced quotes in request"}
 	errInvalidBulkLength      = &errProtocol{"invalid bulk length"}
 	errInvalidMultiBulkLength = &errProtocol{"invalid multibulk length"}
-	errDetached               = errors.New("detached")
-	errIncompleteCommand      = errors.New("incomplete command")
-	errTooMuchData            = errors.New("too much data")
 )
 
 type errProtocol struct {
@@ -229,25 +224,4 @@ func ReadCommands(buf []byte) ([]Command, []byte, error) {
 	} else {
 		return nil, writeback, nil
 	}
-}
-
-// Writer allows for writing RESP messages.
-type Writer struct {
-	b []byte
-}
-
-// WriteArray writes an array header. You must then write additional
-// sub-responses to the client to complete the response.
-// For example to write two strings:
-//
-//   c.WriteArray(2)
-//   c.WriteBulk("item 1")
-//   c.WriteBulk("item 2")
-func (w *Writer) WriteArray(count int) {
-	w.b = AppendArray(w.b, count)
-}
-
-// WriteBulk writes bulk bytes to the client.
-func (w *Writer) WriteBulk(bulk []byte) {
-	w.b = AppendBulk(w.b, bulk)
 }

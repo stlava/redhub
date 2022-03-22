@@ -42,48 +42,50 @@ func main() {
 		ReusePort: reusePort,
 	}
 
+	signal := make(chan error)
+
 	rh := redhub.NewRedHub(
-		func(c *redhub.Conn) (out []byte, action redhub.Action) {
+		func(c redhub.Conn) (action redhub.Action) {
 			return
 		},
-		func(c *redhub.Conn, err error) (action redhub.Action) {
+		func(c redhub.Conn, err error) (action redhub.Action) {
 			return
 		},
-		func(cmd resp.Command, out []byte) ([]byte, redhub.Action) {
+		func(c redhub.Conn, cmd resp.Command) (action redhub.Action) {
 			var status redhub.Action
 			switch strings.ToLower(string(cmd.Args[0])) {
 			default:
-				out = resp.AppendError(out, "ERR unknown command '"+string(cmd.Args[0])+"'")
+				c.WriteError("ERR unknown command '" + string(cmd.Args[0]) + "'")
 			case "ping":
-				out = resp.AppendString(out, "PONG")
+				c.WriteString("PONG")
 			case "quit":
-				out = resp.AppendString(out, "OK")
+				c.WriteString("OK")
 				status = redhub.Close
 			case "set":
 				if len(cmd.Args) != 3 {
-					out = resp.AppendError(out, "ERR wrong number of arguments for '"+string(cmd.Args[0])+"' command")
+					c.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					break
 				}
 				mu.Lock()
 				items[string(cmd.Args[1])] = cmd.Args[2]
 				mu.Unlock()
-				out = resp.AppendString(out, "OK")
+				c.WriteString("OK")
 			case "get":
 				if len(cmd.Args) != 2 {
-					out = resp.AppendError(out, "ERR wrong number of arguments for '"+string(cmd.Args[0])+"' command")
+					c.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					break
 				}
 				mu.RLock()
 				val, ok := items[string(cmd.Args[1])]
 				mu.RUnlock()
 				if !ok {
-					out = resp.AppendNull(out)
+					c.WriteNull()
 				} else {
-					out = resp.AppendBulk(out, val)
+					c.WriteBulk(val)
 				}
 			case "del":
 				if len(cmd.Args) != 2 {
-					out = resp.AppendError(out, "ERR wrong number of arguments for '"+string(cmd.Args[0])+"' command")
+					c.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 					break
 				}
 				mu.Lock()
@@ -91,22 +93,23 @@ func main() {
 				delete(items, string(cmd.Args[1]))
 				mu.Unlock()
 				if !ok {
-					out = resp.AppendInt(out, 0)
+					c.WriteInt64(0)
 				} else {
-					out = resp.AppendInt(out, 1)
+					c.WriteInt64(1)
 				}
-			case "config":
-				// This simple (blank) response is only here to allow for the
-				// redis-benchmark command to work with this example.
-				out = resp.AppendArray(out, 2)
-				out = resp.AppendBulk(out, cmd.Args[2])
-				out = resp.AppendBulkString(out, "")
 			}
-			return out, status
+			return status
 		},
 	)
-	log.Printf("started redhub server at %s", addr)
-	err := redhub.ListendAndServe(protoAddr, option, rh)
+
+	go func() {
+		select {
+		case _ = <-signal:
+			fmt.Println("signal recieved")
+		}
+	}()
+
+	err := redhub.ListendAndServe(signal, protoAddr, option, rh)
 	if err != nil {
 		log.Fatal(err)
 	}
