@@ -1,6 +1,7 @@
 package redhub
 
 import (
+	"context"
 	"github.com/IceFireDB/redhub/pkg/resp"
 	gnet "github.com/panjf2000/gnet/v2"
 	"sync"
@@ -55,6 +56,10 @@ type Conn interface {
 	// PeekPipeline returns all commands in current pipeline, if any.
 	// The commands remain in the pipeline.
 	PeekPipeline() []resp.Command
+	// GetContext returns the Conn's context
+	GetContext() context.Context
+	// SetContext sets the Conn's context.
+	SetContext(ctx context.Context)
 }
 
 type conn struct {
@@ -64,6 +69,7 @@ type conn struct {
 	processData chan interface{}
 	closed      bool
 	muClosed    *sync.Mutex
+	ctx         context.Context
 }
 
 func (c *conn) close() error {
@@ -96,8 +102,17 @@ func (c *conn) ReadPipeline() []resp.Command {
 	c.cb.command = []resp.Command{}
 	return cmds
 }
+
 func (c *conn) PeekPipeline() []resp.Command {
 	return c.cb.command
+}
+
+func (c *conn) SetContext(ctx context.Context) {
+	c.ctx = ctx
+}
+
+func (c *conn) GetContext() context.Context {
+	return c.ctx
 }
 
 func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {

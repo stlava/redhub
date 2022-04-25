@@ -2,6 +2,7 @@ package redhub
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"sync"
 	"time"
@@ -125,6 +126,7 @@ func (rs *RedHub) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		wr:          resp.NewWriter(),
 		processData: make(chan interface{}),
 		muClosed:    &sync.Mutex{},
+		ctx:         context.Background(),
 	}
 	rs.conns[c] = newConn
 
