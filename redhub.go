@@ -171,21 +171,16 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	buf, _ := gc.Next(-1)
 	c.cb.buf.Write(buf)
 
-	cmds, lastbyte, err := resp.ReadCommands(c.cb.buf.Bytes())
+	// Make sure to make a copy buffer because it's unsafe to reuse across
+	// executions.
+	raw := make([]byte, len(c.cb.buf.Bytes()))
+	copy(raw, c.cb.buf.Bytes())
+
+	cmds, lastbyte, err := resp.ReadCommands(raw)
 	if err != nil {
 		_, _ = gc.Write(resp.AppendError([]byte{}, "ERR "+err.Error()))
 		c.cb.mu.Unlock()
 		return
-	}
-
-	// Make sure to make a copy of the args because the underlying
-	// slice that made it is "unsafe".
-	for _, cmd := range cmds {
-		for i, arg := range cmd.Args {
-			n := make([]byte, len(arg))
-			copy(n, arg)
-			cmd.Args[i] = n
-		}
 	}
 
 	c.cb.command = append(c.cb.command, cmds...)
