@@ -145,6 +145,8 @@ func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {
 		c.wr.Flush()
 		_ = c.conn.AsyncWrite(out, nil)
 
+		c.cb.pb.Reset()
+
 		if status == Close {
 			_ = c.close()
 		}
