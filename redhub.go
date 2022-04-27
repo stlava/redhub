@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/IceFireDB/redhub/pool"
 	"sync"
 	"time"
 
@@ -108,6 +109,8 @@ type connBuffer struct {
 	buf     bytes.Buffer
 	command []resp.Command
 	mu      *sync.Mutex
+	pb      *pool.BytePool
+	ip      *pool.IntPool
 }
 
 func (rs *RedHub) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
@@ -118,6 +121,8 @@ func (rs *RedHub) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 		buf:     bytes.Buffer{},
 		command: []resp.Command{},
 		mu:      &sync.Mutex{},
+		pb:      pool.NewBytePool(),
+		ip:      pool.NewIntPool(),
 	}
 
 	newConn := &conn{
@@ -173,10 +178,22 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 
 	// Make sure to make a copy buffer because it's unsafe to reuse across
 	// executions.
-	raw := make([]byte, len(c.cb.buf.Bytes()))
+	target := len(c.cb.buf.Bytes())
+	raw := c.cb.pb.Get()
+
+	if target > cap(raw) {
+		needed := target - cap(raw)
+		raw = append(raw[0:cap(raw)], make([]byte, needed)...)
+	} else {
+		raw = raw[0:target]
+	}
+
 	copy(raw, c.cb.buf.Bytes())
 
-	cmds, lastbyte, err := resp.ReadCommands(raw)
+	// Parse commands
+	cmds, lastbyte, err := resp.ReadCommands(c.cb.ip, raw)
+	defer c.cb.ip.Reset()
+
 	if err != nil {
 		_, _ = gc.Write(resp.AppendError([]byte{}, "ERR "+err.Error()))
 		c.cb.mu.Unlock()

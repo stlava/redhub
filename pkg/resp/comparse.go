@@ -1,5 +1,9 @@
 package resp
 
+import (
+	"github.com/IceFireDB/redhub/pool"
+)
+
 var (
 	errUnbalancedQuotes       = &errProtocol{"unbalanced quotes in request"}
 	errInvalidBulkLength      = &errProtocol{"invalid bulk length"}
@@ -46,9 +50,11 @@ func parseInt(b []byte) (int, bool) {
 }
 
 // ReadCommands parses a raw message and returns commands.
-func ReadCommands(buf []byte) ([]Command, []byte, error) {
+func ReadCommands(intPool *pool.IntPool, buf []byte) ([]Command, []byte, error) {
 	var cmds []Command
 	var writeback []byte
+	marks := intPool.Get()
+
 	b := buf
 	if len(b) > 0 {
 		// we have data, yay!
@@ -147,7 +153,7 @@ func ReadCommands(buf []byte) ([]Command, []byte, error) {
 			}
 		case '*':
 			// resp formatted command
-			marks := make([]int, 0, 16)
+			marks = marks[0:0]
 		outer2:
 			for i := 1; i < len(b); i++ {
 				if b[i] == '\n' {
@@ -197,6 +203,7 @@ func ReadCommands(buf []byte) ([]Command, []byte, error) {
 						var cmd Command
 						cmd.Raw = b[:i+1]
 						cmd.Args = make([][]byte, len(marks)/2)
+
 						// slice up the raw command into the args based on
 						// the recorded marks.
 						for h := 0; h < len(marks); h += 2 {
