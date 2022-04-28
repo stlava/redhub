@@ -179,13 +179,12 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	// Make sure to make a copy buffer because it's unsafe to reuse across
 	// executions.
 	target := len(c.cb.buf.Bytes())
-	raw := c.cb.pb.Get()
 
-	if target > cap(raw) {
-		needed := target - cap(raw)
-		raw = append(raw[0:cap(raw)], make([]byte, needed)...)
+	var raw []byte
+	if target > pool.BytePoolArrSize {
+		raw = make([]byte, target)
 	} else {
-		raw = raw[0:target]
+		raw = c.cb.pb.Get()[0:target]
 	}
 
 	copy(raw, c.cb.buf.Bytes())

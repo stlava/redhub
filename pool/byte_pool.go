@@ -1,9 +1,9 @@
 package pool
 
-const arrSize = 65536
+const BytePoolArrSize = 65536
 
 type BytePool struct {
-	bp       [][arrSize]byte
+	bp       [][BytePoolArrSize]byte
 	bpOffset int
 }
 
@@ -13,7 +13,7 @@ func NewBytePool() *BytePool {
 
 func (b *BytePool) Get() []byte {
 	if b.bpOffset == len(b.bp) {
-		b.bp = append(b.bp, [arrSize]byte{})
+		b.bp = append(b.bp, [BytePoolArrSize]byte{})
 	}
 
 	r := b.bp[b.bpOffset][0:0]
