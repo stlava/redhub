@@ -1,6 +1,6 @@
 package pool
 
-const arrSize = 16384
+const arrSize = 65536
 
 type BytePool struct {
 	bp       [][arrSize]byte
