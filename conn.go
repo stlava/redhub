@@ -1,8 +1,10 @@
 package redhub
 
 import (
+	"bytes"
 	"context"
 	"github.com/IceFireDB/redhub/pkg/resp"
+	"github.com/IceFireDB/redhub/pool"
 	gnet "github.com/panjf2000/gnet/v2"
 	"sync"
 )
@@ -62,6 +64,8 @@ type Conn interface {
 	SetContext(ctx context.Context)
 }
 
+const bufferSize = 256 * 1024
+
 type conn struct {
 	conn        gnet.Conn
 	cb          *connBuffer
@@ -70,6 +74,28 @@ type conn struct {
 	closed      bool
 	muClosed    *sync.Mutex
 	ctx         context.Context
+	outBuffPool *ByteQueue
+}
+
+func NewConn(gc gnet.Conn) *conn {
+	// buffer for read size
+	cb := &connBuffer{
+		buf:     bytes.Buffer{},
+		command: []resp.Command{},
+		mu:      &sync.Mutex{},
+		pb:      pool.NewBytePool(),
+		ip:      pool.NewIntPool(),
+	}
+
+	return &conn{
+		conn:        gc,
+		cb:          cb,
+		wr:          resp.NewWriter(),
+		processData: make(chan interface{}),
+		muClosed:    &sync.Mutex{},
+		ctx:         context.Background(),
+		outBuffPool: &ByteQueue{},
+	}
 }
 
 func (c *conn) close() error {
@@ -141,9 +167,22 @@ func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {
 			}
 		}
 
-		out := c.wr.Buffer()
+		// Get a buffer out of the pool and if it's big enough use it. Otherwise,
+		// allocate a new buffer.
+		outBuffer := c.outBuffPool.Pop()
+		orig := c.wr.OrigBuffer()
+		if cap(outBuffer) < len(orig) {
+			outBuffer = make([]byte, 0, len(orig))
+		}
+
+		outBuffer = outBuffer[0:len(orig)]
+		copy(outBuffer, orig)
+
 		c.wr.Flush()
-		_ = c.conn.AsyncWrite(out, nil)
+		_ = c.conn.AsyncWrite(outBuffer, func(gc gnet.Conn) error {
+			c.outBuffPool.Push(outBuffer[0:0])
+			return nil
+		})
 
 		c.cb.pb.Reset()
 

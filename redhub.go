@@ -2,7 +2,6 @@ package redhub
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"github.com/IceFireDB/redhub/pool"
 	"sync"
@@ -117,22 +116,7 @@ func (rs *RedHub) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
 	rs.connSync.Lock()
 	defer rs.connSync.Unlock()
 
-	cb := &connBuffer{
-		buf:     bytes.Buffer{},
-		command: []resp.Command{},
-		mu:      &sync.Mutex{},
-		pb:      pool.NewBytePool(),
-		ip:      pool.NewIntPool(),
-	}
-
-	newConn := &conn{
-		conn:        c,
-		cb:          cb,
-		wr:          resp.NewWriter(),
-		processData: make(chan interface{}),
-		muClosed:    &sync.Mutex{},
-		ctx:         context.Background(),
-	}
+	newConn := NewConn(c)
 	rs.conns[c] = newConn
 
 	go newConn.process(rs.handler)

@@ -1,12 +1,15 @@
 package resp
 
+const bufferSize = 256 * 1024
+
 type Writer struct {
 	b []byte
 }
 
 // NewWriter creates a new RESP writer.
 func NewWriter() *Writer {
-	return &Writer{}
+	buff := [bufferSize]byte{}
+	return &Writer{b: buff[0:0]}
 }
 
 // WriteNull writes a null to the client
