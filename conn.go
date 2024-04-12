@@ -108,7 +108,7 @@ func (c *conn) close() error {
 
 	c.closed = true
 	close(c.processData)
-	return c.conn.Close(nil)
+	return c.conn.Close()
 }
 
 func (c *conn) WriteString(str string)      { c.wr.WriteString(str) }
@@ -179,7 +179,7 @@ func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {
 		copy(outBuffer, orig)
 
 		c.wr.Flush()
-		_ = c.conn.AsyncWrite(outBuffer, func(gc gnet.Conn) error {
+		_ = c.conn.AsyncWrite(outBuffer, func(gc gnet.Conn, _ error) error {
 			c.outBuffPool.Push(outBuffer[0:0])
 			return nil
 		})
