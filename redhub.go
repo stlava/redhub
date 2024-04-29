@@ -69,6 +69,8 @@ type Options struct {
 
 	// SocketSendBuffer sets the maximum socket send buffer in bytes.
 	SocketSendBuffer int
+
+	EdgeTriggeredIO bool
 }
 
 func NewRedHub(
@@ -157,7 +159,10 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 
 	c.cb.mu.Lock()
 
+	// Read data from client
 	buf, _ := gc.Next(-1)
+
+	// Write data to buffer
 	c.cb.buf.Write(buf)
 
 	// Make sure to make a copy buffer because it's unsafe to reuse across
@@ -174,6 +179,8 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	copy(raw, c.cb.buf.Bytes())
 
 	// Parse commands
+	// cmds is list of formed commands
+	// lastbyte is slice remaining of not yet fully formed command
 	cmds, lastbyte, err := resp.ReadCommands(c.cb.ip, raw)
 	defer c.cb.ip.Reset()
 
@@ -183,12 +190,16 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 		return
 	}
 
+	// Appends parsed commands
 	c.cb.command = append(c.cb.command, cmds...)
 	c.cb.buf.Reset()
 	if len(lastbyte) == 0 {
+		// If nothing else to be read then notify handler to read commnads
 		c.cb.mu.Unlock()
 		c.notify()
 	} else {
+		// Still more to read, write last bytes to the buffer and continue
+		// on loop which will attempt to read more.
 		c.cb.buf.Write(lastbyte)
 		c.cb.mu.Unlock()
 	}
@@ -214,6 +225,7 @@ func ListendAndServe(signal chan error, addr string, options Options, rh *RedHub
 		TCPNoDelay:       gnet.TCPDelay,
 		SocketRecvBuffer: options.SocketRecvBuffer,
 		SocketSendBuffer: options.SocketSendBuffer,
+		EdgeTriggeredIO:  options.EdgeTriggeredIO,
 		ReuseAddr:        false,
 	}
 	rh.signal = signal
