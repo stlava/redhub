@@ -2,7 +2,7 @@ module github.com/IceFireDB/redhub
 
 go 1.17
 
-require github.com/panjf2000/gnet/v2 v2.5.1
+require github.com/panjf2000/gnet/v2 v2.5.2
 
 require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
