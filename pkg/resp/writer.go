@@ -1,15 +1,17 @@
 package resp
 
 const bufferSize = 256 * 1024
+const cleanUpBufferAfterUses = 1000
 
 type Writer struct {
-	b []byte
+	b          []byte
+	useCounter int32
 }
 
 // NewWriter creates a new RESP writer.
 func NewWriter() *Writer {
 	buff := [bufferSize]byte{}
-	return &Writer{b: buff[0:0]}
+	return &Writer{b: buff[0:0], useCounter: 0}
 }
 
 // WriteNull writes a null to the client
@@ -21,9 +23,9 @@ func (w *Writer) WriteNull() {
 // sub-responses to the client to complete the response.
 // For example to write two strings:
 //
-//   c.WriteArray(2)
-//   c.WriteBulk("item 1")
-//   c.WriteBulk("item 2")
+//	c.WriteArray(2)
+//	c.WriteBulk("item 1")
+//	c.WriteBulk("item 2")
 func (w *Writer) WriteArray(count int) {
 	w.b = AppendArray(w.b, count)
 }
@@ -59,6 +61,15 @@ func (w *Writer) SetBuffer(raw []byte) {
 
 // Flush writes all unflushed Write* calls to the underlying writer.
 func (w *Writer) Flush() {
+	w.useCounter += 1
+
+	// release buffer memory
+	if w.useCounter >= cleanUpBufferAfterUses {
+		buff := [bufferSize]byte{}
+		w.b = buff[0:0]
+		w.useCounter = 0
+	}
+
 	w.b = w.b[:0]
 }
 
@@ -93,17 +104,18 @@ func (w *Writer) WriteRaw(data []byte) {
 }
 
 // WriteAny writes any type to client.
-//   nil             -> null
-//   error           -> error (adds "ERR " when first word is not uppercase)
-//   string          -> bulk-string
-//   numbers         -> bulk-string
-//   []byte          -> bulk-string
-//   bool            -> bulk-string ("0" or "1")
-//   slice           -> array
-//   map             -> array with key/value pairs
-//   SimpleString    -> string
-//   SimpleInt       -> integer
-//   everything-else -> bulk-string representation using fmt.Sprint()
+//
+//	nil             -> null
+//	error           -> error (adds "ERR " when first word is not uppercase)
+//	string          -> bulk-string
+//	numbers         -> bulk-string
+//	[]byte          -> bulk-string
+//	bool            -> bulk-string ("0" or "1")
+//	slice           -> array
+//	map             -> array with key/value pairs
+//	SimpleString    -> string
+//	SimpleInt       -> integer
+//	everything-else -> bulk-string representation using fmt.Sprint()
 func (w *Writer) WriteAny(v interface{}) {
 	w.b = AppendAny(w.b, v)
 }

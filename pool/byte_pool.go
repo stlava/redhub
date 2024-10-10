@@ -1,10 +1,12 @@
 package pool
 
 const BytePoolArrSize = 65536
+const cleanUpBytePoolAfterUses = 100
 
 type BytePool struct {
-	bp       [][BytePoolArrSize]byte
-	bpOffset int
+	bp         [][BytePoolArrSize]byte
+	bpOffset   int
+	useCounter int32
 }
 
 func NewBytePool() *BytePool {
@@ -24,4 +26,11 @@ func (b *BytePool) Get() []byte {
 
 func (b *BytePool) Reset() {
 	b.bpOffset = 0
+
+	b.useCounter += 1
+
+	if b.useCounter >= cleanUpBytePoolAfterUses {
+		b.useCounter = 0
+		b.bp = [][BytePoolArrSize]byte{}
+	}
 }
