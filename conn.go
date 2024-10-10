@@ -7,6 +7,7 @@ import (
 	"github.com/IceFireDB/redhub/pool"
 	gnet "github.com/panjf2000/gnet/v2"
 	"sync"
+	"time"
 )
 
 // Conn represents a client connection
@@ -80,11 +81,12 @@ type conn struct {
 func NewConn(gc gnet.Conn) *conn {
 	// buffer for read size
 	cb := &connBuffer{
-		buf:     bytes.Buffer{},
-		command: []resp.Command{},
-		mu:      &sync.Mutex{},
-		pb:      pool.NewBytePool(),
-		ip:      pool.NewIntPool(),
+		buf:        bytes.Buffer{},
+		command:    []resp.Command{},
+		mu:         &sync.Mutex{},
+		pb:         pool.NewBytePool(),
+		ip:         pool.NewIntPool(),
+		lastAccess: time.Now(),
 	}
 
 	return &conn{
@@ -190,6 +192,7 @@ func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {
 			_ = c.close()
 		}
 
+		c.cb.lastAccess = time.Now()
 		c.cb.mu.Unlock()
 	}
 }

@@ -77,29 +77,55 @@ func NewRedHub(
 	onOpened func(c Conn) (action Action),
 	onClosed func(c Conn, err error) (action Action),
 	handler func(c Conn, cmd resp.Command) (action Action),
+	tickFreq time.Duration,
+	reclaimMemAfter time.Duration,
 ) *RedHub {
 	return &RedHub{
-		conns:    make(map[gnet.Conn]*conn),
-		connSync: sync.RWMutex{},
-		onOpened: onOpened,
-		onClosed: onClosed,
-		handler:  handler,
+		conns:           make(map[gnet.Conn]*conn),
+		connSync:        sync.RWMutex{},
+		onOpened:        onOpened,
+		onClosed:        onClosed,
+		handler:         handler,
+		tickFreq:        tickFreq,
+		reclaimMemAfter: reclaimMemAfter,
 	}
 }
 
 type RedHub struct {
 	*gnet.Engine
-	onOpened func(c Conn) (action Action)
-	onClosed func(c Conn, err error) (action Action)
-	handler  func(c Conn, cmd resp.Command) (action Action)
-	conns    map[gnet.Conn]*conn
-	connSync sync.RWMutex
-	adder    string
-	signal   chan error
+	onOpened        func(c Conn) (action Action)
+	onClosed        func(c Conn, err error) (action Action)
+	handler         func(c Conn, cmd resp.Command) (action Action)
+	conns           map[gnet.Conn]*conn
+	connSync        sync.RWMutex
+	adder           string
+	signal          chan error
+	tickFreq        time.Duration
+	reclaimMemAfter time.Duration
 }
 
 func (rs *RedHub) OnTick() (delay time.Duration, action gnet.Action) {
-	return
+	rs.connSync.Lock()
+	defer rs.connSync.Unlock()
+
+	for _, rsc := range rs.conns {
+		// test if already locked, if it is (TryLock fails) then we skip since conn is active
+		if !rsc.cb.mu.TryLock() {
+			continue
+		}
+
+		// Skip if active in last 30 seconds
+		if time.Since(rsc.cb.lastAccess) < rs.reclaimMemAfter {
+			rsc.cb.mu.Unlock()
+			continue
+		}
+
+		// Reset the buffer
+		rsc.cb.reset()
+		rsc.cb.mu.Unlock()
+	}
+
+	return rs.tickFreq, gnet.None
 }
 
 func (rs *RedHub) OnShutdown(eng gnet.Engine) {
@@ -107,11 +133,23 @@ func (rs *RedHub) OnShutdown(eng gnet.Engine) {
 }
 
 type connBuffer struct {
-	buf     bytes.Buffer
-	command []resp.Command
-	mu      *sync.Mutex
-	pb      *pool.BytePool
-	ip      *pool.IntPool
+	buf        bytes.Buffer
+	command    []resp.Command
+	mu         *sync.Mutex
+	pb         *pool.BytePool
+	ip         *pool.IntPool
+	lastAccess time.Time
+}
+
+func (cb *connBuffer) reset() {
+	cb.buf = bytes.Buffer{}
+	cb.mu = &sync.Mutex{}
+	cb.pb = pool.NewBytePool()
+	cb.ip = pool.NewIntPool()
+
+	if len(cb.command) == 0 {
+		cb.command = []resp.Command{}
+	}
 }
 
 func (rs *RedHub) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
