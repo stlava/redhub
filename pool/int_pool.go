@@ -1,10 +1,12 @@
 package pool
 
 const intArrSize = 16384
+const cleanUpIntPoolAfterUses = 1000
 
 type IntPool struct {
-	bp       [][intArrSize]int
-	bpOffset int
+	bp         [][intArrSize]int
+	bpOffset   int
+	useCounter int32
 }
 
 func NewIntPool() *IntPool {
@@ -24,4 +26,10 @@ func (b *IntPool) Get() []int {
 
 func (b *IntPool) Reset() {
 	b.bpOffset = 0
+	b.useCounter += 1
+
+	if b.useCounter >= cleanUpIntPoolAfterUses {
+		b.bp = [][intArrSize]int{}
+		b.useCounter = 0
+	}
 }
