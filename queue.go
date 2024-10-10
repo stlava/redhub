@@ -2,7 +2,7 @@ package redhub
 
 import "sync"
 
-const cleanUpQueueAfterUses = 1000
+const cleanUpQueueAfterUses = 100
 
 type ByteQueue struct {
 	useCounter int32

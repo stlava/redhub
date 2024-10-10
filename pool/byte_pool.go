@@ -1,7 +1,7 @@
 package pool
 
 const BytePoolArrSize = 65536
-const cleanUpBytePoolAfterUses = 1000
+const cleanUpBytePoolAfterUses = 100
 
 type BytePool struct {
 	bp         [][BytePoolArrSize]byte

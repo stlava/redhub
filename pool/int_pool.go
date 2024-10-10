@@ -1,7 +1,7 @@
 package pool
 
 const intArrSize = 16384
-const cleanUpIntPoolAfterUses = 1000
+const cleanUpIntPoolAfterUses = 100
 
 type IntPool struct {
 	bp         [][intArrSize]int
