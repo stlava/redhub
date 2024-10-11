@@ -4,9 +4,12 @@ import (
 	"context"
 	"github.com/IceFireDB/redhub/pkg/resp"
 	gnet "github.com/panjf2000/gnet/v2"
+	"github.com/panjf2000/gnet/v2/pkg/pool/byteslice"
 	"sync"
 	"time"
 )
+
+var outBufferPool = byteslice.Pool{}
 
 // Conn represents a client connection
 type Conn interface {
@@ -71,6 +74,12 @@ var connBufferPool = sync.Pool{
 	},
 }
 
+var writerPool = sync.Pool{
+	New: func() interface{} {
+		return resp.NewWriter()
+	},
+}
+
 type conn struct {
 	conn        gnet.Conn
 	cb          *connBuffer
@@ -79,7 +88,6 @@ type conn struct {
 	closed      bool
 	muClosed    *sync.Mutex
 	ctx         context.Context
-	outBuffPool *ByteQueue
 }
 
 func NewConn(gc gnet.Conn) *conn {
@@ -89,11 +97,10 @@ func NewConn(gc gnet.Conn) *conn {
 	return &conn{
 		conn:        gc,
 		cb:          cb,
-		wr:          resp.NewWriter(),
+		wr:          writerPool.Get().(*resp.Writer),
 		processData: make(chan interface{}),
 		muClosed:    &sync.Mutex{},
 		ctx:         context.Background(),
-		outBuffPool: &ByteQueue{},
 	}
 }
 
@@ -109,6 +116,7 @@ func (c *conn) close() error {
 	close(c.processData)
 	c.cb.reset()
 	connBufferPool.Put(c.cb)
+	writerPool.Put(c.wr)
 
 	return c.conn.Close()
 }
@@ -171,18 +179,13 @@ func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {
 
 		// Get a buffer out of the pool and if it's big enough use it. Otherwise,
 		// allocate a new buffer.
-		outBuffer := c.outBuffPool.Pop()
 		orig := c.wr.OrigBuffer()
-		if cap(outBuffer) < len(orig) {
-			outBuffer = make([]byte, 0, len(orig))
-		}
-
-		outBuffer = outBuffer[0:len(orig)]
+		outBuffer := outBufferPool.Get(len(orig))
 		copy(outBuffer, orig)
 
 		c.wr.Flush()
 		_ = c.conn.AsyncWrite(outBuffer, func(gc gnet.Conn, _ error) error {
-			c.outBuffPool.Push(outBuffer[0:0])
+			outBufferPool.Put(outBuffer)
 			return nil
 		})
 
@@ -190,10 +193,11 @@ func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {
 
 		if status == Close {
 			_ = c.close()
+			c.cb.mu.Unlock()
+		} else {
+			c.cb.lastAccess = time.Now()
+			c.cb.mu.Unlock()
 		}
-
-		c.cb.lastAccess = time.Now()
-		c.cb.mu.Unlock()
 	}
 }
 

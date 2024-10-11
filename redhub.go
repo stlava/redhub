@@ -155,7 +155,6 @@ func newConnBuffer() *connBuffer {
 // reallocate allocates new components of the buffer
 func (cb *connBuffer) reallocate() {
 	cb.buf = bytes.Buffer{}
-	cb.mu = &sync.Mutex{}
 	cb.pb = pool.NewBytePool()
 	cb.ip = pool.NewIntPool()
 
@@ -166,8 +165,6 @@ func (cb *connBuffer) reallocate() {
 
 // rest rests for safe reuse
 func (cb *connBuffer) reset() {
-	cb.mu.Lock()
-	defer cb.mu.Unlock()
 	cb.command = []resp.Command{}
 	cb.pb.Reset()
 	cb.ip.Reset()
@@ -198,7 +195,9 @@ func (rs *RedHub) OnClose(gc gnet.Conn, err error) (action gnet.Action) {
 	delete(rs.conns, gc)
 	rs.onClosed(c, err)
 
+	c.cb.mu.Lock()
 	_ = c.close()
+	c.cb.mu.Unlock()
 	return
 }
 
@@ -242,10 +241,10 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	// cmds is list of formed commands
 	// lastbyte is slice remaining of not yet fully formed command
 	cmds, lastbyte, err := resp.ReadCommands(c.cb.ip, raw)
-	defer c.cb.ip.Reset()
 
 	if err != nil {
 		_, _ = gc.Write(resp.AppendError([]byte{}, "ERR "+err.Error()))
+		c.cb.ip.Reset()
 		c.cb.mu.Unlock()
 		return
 	}
@@ -255,12 +254,14 @@ func (rs *RedHub) OnTraffic(gc gnet.Conn) (action gnet.Action) {
 	c.cb.buf.Reset()
 	if len(lastbyte) == 0 {
 		// If nothing else to be read then notify handler to read commnads
+		c.cb.ip.Reset()
 		c.cb.mu.Unlock()
 		c.notify()
 	} else {
 		// Still more to read, write last bytes to the buffer and continue
 		// on loop which will attempt to read more.
 		c.cb.buf.Write(lastbyte)
+		c.cb.ip.Reset()
 		c.cb.mu.Unlock()
 	}
 
