@@ -166,6 +166,8 @@ func (cb *connBuffer) reallocate() {
 
 // rest rests for safe reuse
 func (cb *connBuffer) reset() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 	cb.command = []resp.Command{}
 	cb.pb.Reset()
 	cb.ip.Reset()
