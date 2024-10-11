@@ -141,6 +141,17 @@ type connBuffer struct {
 	lastAccess time.Time
 }
 
+func newConnBuffer() *connBuffer {
+	return &connBuffer{
+		buf:        bytes.Buffer{},
+		command:    []resp.Command{},
+		mu:         &sync.Mutex{},
+		pb:         pool.NewBytePool(),
+		ip:         pool.NewIntPool(),
+		lastAccess: time.Now(),
+	}
+}
+
 func (cb *connBuffer) reset() {
 	cb.buf = bytes.Buffer{}
 	cb.mu = &sync.Mutex{}
