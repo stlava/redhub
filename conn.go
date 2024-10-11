@@ -114,8 +114,13 @@ func (c *conn) close() error {
 
 	c.closed = true
 	close(c.processData)
+
+	// ensure conn buffer is reset before returning it
 	c.cb.reset()
 	connBufferPool.Put(c.cb)
+
+	// ensure writer is flushed before returning it
+	c.wr.Flush()
 	writerPool.Put(c.wr)
 
 	return c.conn.Close()
