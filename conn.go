@@ -1,10 +1,8 @@
 package redhub
 
 import (
-	"bytes"
 	"context"
 	"github.com/IceFireDB/redhub/pkg/resp"
-	"github.com/IceFireDB/redhub/pool"
 	gnet "github.com/panjf2000/gnet/v2"
 	"sync"
 	"time"
@@ -67,6 +65,12 @@ type Conn interface {
 
 const bufferSize = 256 * 1024
 
+var connBufferPool = sync.Pool{
+	New: func() interface{} {
+		return newConnBuffer()
+	},
+}
+
 type conn struct {
 	conn        gnet.Conn
 	cb          *connBuffer
@@ -80,14 +84,7 @@ type conn struct {
 
 func NewConn(gc gnet.Conn) *conn {
 	// buffer for read size
-	cb := &connBuffer{
-		buf:        bytes.Buffer{},
-		command:    []resp.Command{},
-		mu:         &sync.Mutex{},
-		pb:         pool.NewBytePool(),
-		ip:         pool.NewIntPool(),
-		lastAccess: time.Now(),
-	}
+	cb := connBufferPool.Get().(*connBuffer)
 
 	return &conn{
 		conn:        gc,
@@ -110,6 +107,8 @@ func (c *conn) close() error {
 
 	c.closed = true
 	close(c.processData)
+	connBufferPool.Put(c.cb)
+
 	return c.conn.Close()
 }
 
