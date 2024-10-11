@@ -121,7 +121,7 @@ func (rs *RedHub) OnTick() (delay time.Duration, action gnet.Action) {
 		}
 
 		// Reset the buffer
-		rsc.cb.reset()
+		rsc.cb.reallocate()
 		rsc.cb.mu.Unlock()
 	}
 
@@ -152,7 +152,8 @@ func newConnBuffer() *connBuffer {
 	}
 }
 
-func (cb *connBuffer) reset() {
+// reallocate allocates new components of the buffer
+func (cb *connBuffer) reallocate() {
 	cb.buf = bytes.Buffer{}
 	cb.mu = &sync.Mutex{}
 	cb.pb = pool.NewBytePool()
@@ -161,6 +162,14 @@ func (cb *connBuffer) reset() {
 	if len(cb.command) == 0 {
 		cb.command = []resp.Command{}
 	}
+}
+
+// rest rests for safe reuse
+func (cb *connBuffer) reset() {
+	cb.command = []resp.Command{}
+	cb.pb.Reset()
+	cb.ip.Reset()
+	cb.buf.Reset()
 }
 
 func (rs *RedHub) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {

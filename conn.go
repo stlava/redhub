@@ -107,7 +107,7 @@ func (c *conn) close() error {
 
 	c.closed = true
 	close(c.processData)
-	c.cb.command = []resp.Command{}
+	c.cb.reset()
 	connBufferPool.Put(c.cb)
 
 	return c.conn.Close()
