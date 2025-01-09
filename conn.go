@@ -120,8 +120,8 @@ func (c *conn) close() error {
 	connBufferPool.Put(c.cb)
 
 	// ensure writer is flushed before returning it
-	c.wr.Flush()
-	writerPool.Put(c.wr)
+	c.wr.Flush()         // TODO: data race
+	writerPool.Put(c.wr) // this puts it back into pool
 
 	return c.conn.Close()
 }
@@ -184,11 +184,13 @@ func (c *conn) process(handler func(c Conn, cmd resp.Command) (action Action)) {
 
 		// Get a buffer out of the pool and if it's big enough use it. Otherwise,
 		// allocate a new buffer.
+		c.muClosed.Lock()
 		orig := c.wr.OrigBuffer()
 		outBuffer := outBufferPool.Get(len(orig))
 		copy(outBuffer, orig)
 
-		c.wr.Flush()
+		c.wr.Flush()        // TODO: data race.. here the c.wr may no longer be valid... because con is closed..
+		c.muClosed.Unlock() // ensure we're not trying to use wr when it's closed..
 		_ = c.conn.AsyncWrite(outBuffer, func(gc gnet.Conn, _ error) error {
 			outBufferPool.Put(outBuffer)
 			return nil
